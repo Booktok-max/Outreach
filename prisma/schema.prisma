@@ -1,0 +1,404 @@
+// Atomic Shelf Outreach - V1 relational schema.
+//
+// Design notes
+// ------------
+// * CSV/XLSX files are interchange formats only. Every imported row is staged in
+//   `import_row` (with its raw source values for audit/debugging) and only the
+//   reviewed, mapped, validated survivors become `person` / `book` /
+//   `person_book` / `contact_point` records.
+// * `contact_point.normalized_value` is globally unique per contact type, which
+//   is what makes "the same email must not exist twice" a database guarantee
+//   rather than an application convention.
+// * `person.primary_email*` and `person.search_text` are derived caches written
+//   by a single persistence module so the lead browser can filter/search
+//   without loading the dataset into the UI.
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum ValidationStatus {
+  UNKNOWN
+  VALID
+  INVALID
+}
+
+enum ContactPointType {
+  EMAIL
+  WEBSITE
+  PHONE
+  SOCIAL
+}
+
+enum PersonBookRole {
+  AUTHOR
+  CO_AUTHOR
+  EDITOR
+  ILLUSTRATOR
+  TRANSLATOR
+  CONTRIBUTOR
+  PUBLISHER
+  AGENT
+}
+
+enum ImportFileType {
+  CSV
+  XLSX
+}
+
+/// Progress of a single uploaded file through the staged import pipeline.
+enum ImportBatchStatus {
+  /// File stored and rows staged; waiting for column mapping.
+  UPLOADED
+  /// Operator confirmed the column mapping; rows not validated yet.
+  MAPPED
+  /// Validation + deduplication finished; ready to review and confirm.
+  VALIDATED
+  /// Valid rows were written into the canonical tables.
+  IMPORTED
+  FAILED
+  CANCELLED
+}
+
+enum ImportRowStatus {
+  /// Staged, not yet validated.
+  PENDING
+  /// Passes validation and passed deduplication.
+  VALID
+  /// Fails validation - kept for review and export, never silently dropped.
+  INVALID
+  /// Duplicate of another source row or of an existing database record.
+  DUPLICATE
+  /// Written into person/book/person_book/contact_point.
+  IMPORTED
+  /// Operator chose to ignore this row.
+  SKIPPED
+}
+
+enum DuplicateKind {
+  /// Identical (after normalization) to an earlier source row.
+  SOURCE_ROW
+  /// Same normalized email as an earlier row in the same file, same book.
+  EMAIL_IN_BATCH
+  /// Normalized email already exists in the database.
+  EMAIL_EXISTING
+  /// Person + book relationship already exists in the database.
+  RELATIONSHIP_EXISTING
+}
+
+enum OutreachState {
+  PENDING
+  APPROVED
+  REJECTED
+  SUPPRESSED
+}
+
+enum SuppressionReason {
+  MANUAL
+  UNSUBSCRIBE
+  PREVIOUS_CLIENT
+  DUPLICATE
+  INVALID
+  DO_NOT_CONTACT
+}
+
+enum OutreachEventType {
+  APPROVED
+  REJECTED
+  SUPPRESSED
+  UNSUPPRESSED
+  RESET
+  EDITED
+}
+
+
+// ---------------------------------------------------------------------------
+// Canonical tables
+// ---------------------------------------------------------------------------
+
+/// A contactable person: author, contributor, editor, publicist, publisher...
+model Person {
+  id String @id @default(cuid())
+
+  firstName    String?
+  lastName     String?
+  fullName     String?
+  /// Pen name / author brand, when it differs from the legal-style name.
+  penName      String?
+  organization String?
+  role         String?
+  notes        String?
+
+  websiteUrl   String?
+  twitterUrl   String?
+  instagramUrl String?
+  facebookUrl  String?
+  linkedinUrl  String?
+  tiktokUrl    String?
+  goodreadsUrl String?
+
+  /// Derived cache of the primary email contact point (normalized, lowercased).
+  primaryEmail String?
+  /// Validation result of `primaryEmail`; null when the person has no email.
+  emailStatus  ValidationStatus?
+  /// Derived cache: lowercased search haystack (name, email, organization, books).
+  searchText   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contactPoints  ContactPoint[]
+  books          PersonBook[]
+  outreach       OutreachStatus?
+  outreachEvents OutreachEvent[]
+  importRows     ImportRow[]
+
+  @@index([primaryEmail])
+  @@index([emailStatus])
+  @@index([organization])
+  @@index([fullName])
+  @@index([searchText])
+  @@index([updatedAt])
+  @@map("person")
+}
+
+model Book {
+  id String @id @default(cuid())
+
+  title           String
+  subtitle        String?
+  /// Lowercased, whitespace-collapsed, punctuation-light title.
+  normalizedTitle String
+  /// Stable de-duplication key: `<normalized title>|<normalized lead author>`.
+  quickKey        String  @unique
+  /// Author name as supplied by the source row (used for quickKey + display).
+  primaryAuthorName String?
+
+  seriesName      String?
+  seriesPosition  Int?
+  genre           String?
+  description     String?
+  bookUrl         String?
+  amazonUrl       String?
+  isbn            String?
+  publisher       String?
+  bookFormat      String?
+  language        String?
+  publicationDate DateTime?
+  /// Derived cache: lowercased search haystack (title, series, author, isbn).
+  searchText      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  people     PersonBook[]
+  importRows ImportRow[]
+
+  @@index([normalizedTitle])
+  @@index([seriesName])
+  @@index([genre])
+  @@index([searchText])
+  @@map("book")
+}
+
+/// Person <-> Book link. One row per (person, book, role).
+model PersonBook {
+  id       String         @id @default(cuid())
+  personId String
+  bookId   String
+  role     PersonBookRole @default(AUTHOR)
+
+  /// The book used by the default GMass export for this person.
+  isPrimaryBook Boolean @default(false)
+  notes         String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+  book   Book   @relation(fields: [bookId], references: [id], onDelete: Cascade)
+
+  @@unique([personId, bookId, role])
+  @@index([bookId])
+  @@index([personId])
+  @@map("person_book")
+}
+
+/// A single contactable value (email address, website, social profile, phone).
+model ContactPoint {
+  id       String           @id @default(cuid())
+  personId String
+  type     ContactPointType
+
+  /// Value exactly as supplied by the source data (trimmed only).
+  value String
+  /// Normalization used for uniqueness and de-duplication: emails are trimmed +
+  /// lowercased, URLs are canonicalized. Unique together with `type`.
+  normalizedValue String
+
+  label             String?
+  isPrimary         Boolean          @default(false)
+  status            ValidationStatus @default(UNKNOWN)
+  validationMessage String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@unique([type, normalizedValue])
+  @@index([normalizedValue])
+  @@index([personId])
+  @@map("contact_point")
+}
+
+
+
+// ---------------------------------------------------------------------------
+// Import pipeline
+// ---------------------------------------------------------------------------
+
+model ImportBatch {
+  id String @id @default(cuid())
+
+  filename     String
+  fileType     ImportFileType
+  fileSize     Int
+  /// SHA-256 of the uploaded file, used to flag re-uploads of the same file.
+  fileChecksum String?
+  /// Worksheet names discovered in an XLSX upload.
+  sheetNames   Json?
+  /// Worksheet selected by the operator (XLSX only).
+  sheetName    String?
+
+  status           ImportBatchStatus @default(UPLOADED)
+  totalRows        Int               @default(0)
+  validRows        Int               @default(0)
+  invalidRows      Int               @default(0)
+  duplicateRows    Int               @default(0)
+  importedRows     Int               @default(0)
+  skippedRows      Int               @default(0)
+  rowLimitExceeded Boolean           @default(false)
+
+  /// ColumnDetection[] - suggestion, confidence and reason per source header.
+  detectedColumns     Json?
+  /// { [sourceHeader]: CanonicalField | null } as confirmed by the operator.
+  columnMapping       Json?
+  mappingConfirmedAt  DateTime?
+
+  validatedAt    DateTime?
+  importedAt     DateTime?
+  failureMessage String?
+  createdBy      String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  rows ImportRow[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+  @@map("import_batch")
+}
+
+/// One staged source row. `rawData` is the untouched source record.
+model ImportRow {
+  id            String @id @default(cuid())
+  importBatchId String
+  /// 1-based row number in the source file excluding the header row.
+  rowNumber     Int
+
+  rawData        Json
+  /// Mapped + normalized canonical values ({ email, bookTitle, ... }).
+  normalizedData Json?
+  status         ImportRowStatus @default(PENDING)
+
+  duplicateKind    DuplicateKind?
+  duplicateMessage String?
+  /// [{ field, code, message }]
+  errors   Json?
+  warnings Json?
+
+  /// Fingerprint of all normalized mapped values (duplicate source-row detection).
+  sourceFingerprint String?
+  /// `<normalized email>|<normalized book key>` (duplicate relationship detection).
+  identityKey       String?
+
+  personId String?
+  bookId   String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  importBatch ImportBatch @relation(fields: [importBatchId], references: [id], onDelete: Cascade)
+  person      Person?    @relation(fields: [personId], references: [id], onDelete: SetNull)
+  book        Book?      @relation(fields: [bookId], references: [id], onDelete: SetNull)
+
+  @@unique([importBatchId, rowNumber])
+  @@index([importBatchId, status])
+  @@index([importBatchId, sourceFingerprint])
+  @@index([importBatchId, identityKey])
+  @@index([personId])
+  @@index([bookId])
+  @@map("import_row")
+}
+
+// ---------------------------------------------------------------------------
+// Outreach review state
+// ---------------------------------------------------------------------------
+
+model OutreachStatus {
+  id       String @id @default(cuid())
+  personId String @unique
+
+  status            OutreachState      @default(PENDING)
+  suppressionReason SuppressionReason?
+  /// Free-form operator notes.
+  notes             String?
+  /// Why the record was approved/rejected/suppressed just now.
+  decisionNote      String?
+  reviewedBy        String?
+  reviewedAt        DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([status])
+  @@index([updatedAt])
+  @@map("outreach_status")
+}
+
+/// Append-only trail of review decisions (approve / reject / suppress / reset).
+model OutreachEvent {
+  id       String @id @default(cuid())
+  personId String
+
+  type      OutreachEventType
+  fromState OutreachState?
+  toState   OutreachState
+
+  reason SuppressionReason?
+  note   String?
+  actor  String?
+
+  createdAt DateTime @default(now())
+
+  person Person @relation(fields: [personId], references: [id], onDelete: Cascade)
+
+  @@index([personId, createdAt])
+  @@index([createdAt])
+  @@map("outreach_event")
+}
+
+

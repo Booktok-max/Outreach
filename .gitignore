@@ -1,0 +1,37 @@
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+
+# next.js
+/.next/
+/out/
+next-env.d.ts
+
+# production
+/build
+/dist
+
+# prisma
+/src/generated/
+
+# testing
+/coverage
+/test-results
+
+# misc
+.DS_Store
+*.pem
+*.log
+npm-debug.log*
+.vercel
+*.tsbuildinfo
+
+# env files - never commit credentials or contact data
+.env
+.env.*
+!.env.example
+
+# local uploads / generated fixtures (may contain synthetic or real contact data)
+/tmp
+/fixtures/local

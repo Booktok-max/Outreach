@@ -17,8 +17,11 @@ export default defineConfig({
     globalSetup: ["tests/db/global-setup.ts"],
     setupFiles: ["tests/db/setup-env.ts"],
     fileParallelism: false,
-    testTimeout: 60_000,
-    hookTimeout: 120_000,
+    // These tests run against a remote, pooled PostgreSQL instance, so a single
+    // test performs many sequential round trips. 60s is not enough headroom for
+    // the full import pipeline on a cold/remote database.
+    testTimeout: 180_000,
+    hookTimeout: 180_000,
     reporters: ["default"],
   },
   resolve: {

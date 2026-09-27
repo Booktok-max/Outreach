@@ -20,8 +20,17 @@ function createPrismaClient(): PrismaClient {
 
   const adapter = new PrismaPg({ connectionString: DATABASE_URL });
 
+  // Prisma's default interactive-transaction timeout is 5s. That is fine for a
+  // local socket but too short for a remote/managed database over a pooler, where
+  // a single commit legitimately performs many sequential round trips. The value
+  // is overridable (the database test suite raises it) without changing the
+  // default behaviour.
+  const timeout = Number(process.env.PRISMA_TRANSACTION_TIMEOUT_MS ?? 5000);
+  const transactionOptions = Number.isFinite(timeout) && timeout > 0 ? { timeout } : undefined;
+
   return new PrismaClient({
     adapter,
+    ...(transactionOptions ? { transactionOptions } : {}),
     log: NODE_ENV === "development" ? ["warn", "error"] : ["error"],
   });
 }

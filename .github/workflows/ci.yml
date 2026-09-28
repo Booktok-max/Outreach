@@ -1,0 +1,126 @@
+name: CI
+
+# Runs on every push to main and on every pull request targeting main.
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# Never let two runs share the same branch ref.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Build, typecheck and unit tests. These need NO database and NO secrets.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: Build, typecheck and unit tests
+    runs-on: ubuntu-latest
+
+    # Job-level so EVERY step below sees these values: `prisma generate` and
+    # `npm run build` both load prisma.config.ts, which requires DATABASE_URL to
+    # be resolvable. The build never opens a database connection, so a
+    # non-routable placeholder is used. These are not secrets and point at
+    # nothing. No real credential is ever present in this workflow.
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci_placeholder
+      ADMIN_USERNAME: ci
+      ADMIN_PASSWORD: ci
+      SESSION_SECRET: ci_only_placeholder_secret_not_a_real_credential
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          # Must satisfy the "engines.node" constraint in package.json.
+          node-version: 22
+          cache: npm
+
+      # Reproducible install: exactly what package-lock.json pins.
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Typecheck
+        run: npx tsc --noEmit --pretty false
+
+      - name: Production build
+        run: npm run build
+
+  # ---------------------------------------------------------------------------
+  # PostgreSQL integration suite.
+  #
+  # This job runs against a DEDICATED, DISPOSABLE test database only. It is
+  # deliberately NOT wired to any application/production database.
+  #
+  # Required manual setup (one time, in GitHub):
+  #   Repository -> Settings -> Secrets and variables -> Actions
+  #   -> New repository secret -> name: TEST_DATABASE_URL
+  #   -> value: the connection string of the dedicated test database.
+  #
+  # The secret name is hard-wired below. TEST_DATABASE_URL is NEVER derived
+  # from DATABASE_URL, and no credential is stored in this repository.
+  #
+  # If the secret is not configured the job SKIPS with a clear message rather
+  # than contacting some other database.
+  # ---------------------------------------------------------------------------
+  integration:
+    name: PostgreSQL integration tests
+    runs-on: ubuntu-latest
+    needs: verify
+
+    # Application-database placeholder only. This is NEVER the test database and
+    # is never used as one: the suite below reads TEST_DATABASE_URL, which comes
+    # exclusively from the repository secret. The placeholder exists solely so
+    # `prisma generate` can load prisma.config.ts.
+    env:
+      DATABASE_URL: postgresql://ci:ci@127.0.0.1:5432/ci_placeholder
+      ADMIN_USERNAME: ci
+      ADMIN_PASSWORD: ci
+      SESSION_SECRET: ci_only_placeholder_secret_not_a_real_credential
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Generate Prisma client
+        run: npx prisma generate
+
+      - name: Check for the dedicated test database secret
+        id: check_secret
+        env:
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        run: |
+          if [ -z "$TEST_DATABASE_URL" ]; then
+            echo "::notice title=Integration tests skipped::Repository secret TEST_DATABASE_URL is not configured. Add a dedicated, disposable test database URL under Settings -> Secrets and variables -> Actions. No other database will be contacted."
+            echo "SKIPPED=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "TEST_DATABASE_URL secret is present (value not shown)."
+            echo "SKIPPED=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Run database integration tests
+        if: steps.check_secret.outputs.SKIPPED == 'false'
+        env:
+          TEST_DATABASE_URL: ${{ secrets.TEST_DATABASE_URL }}
+        run: npm run test:db

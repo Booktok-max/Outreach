@@ -1,12 +1,14 @@
-# Atomic Shelf — Unsubscribe Release Readiness Report
+﻿# Atomic Shelf — Unsubscribe Release Readiness Report
 
 Date: 2026-10-23
 
 ## 1. Executive summary and release recommendation
 
-Recommendation: **Ready for owner-authorized release with conditions.**
+**Final recommendation: ready for the owner-authorized release phase, pending production verification and deployment approval.**
 
-The unsubscribe and suppression implementation is complete in the local repository, independently traced through token, route, persistence, dashboard, and export paths, and verified with unit, database, type, lint, and build checks. Remaining work is limited to owner-side production verification and deployment approval. No commit, push, deployment, or production mutation was performed.
+The previously identified dashboard CSV export defect has been corrected locally and regression-verified. The unsubscribe workflow also remains verified. The prior finding of **“Not ready for release as-is”** was driven by the open CSV completeness defect; that defect has now been resolved in the local implementation, and the final acceptance evidence supports moving to owner-authorized deployment rather than stopping at an unresolved release blocker.
+
+No open release blocker remains in the local implementation. The application implementation is still uncommitted and undeployed.
 
 ## 2. Repository identity and baseline
 
@@ -15,175 +17,215 @@ The unsubscribe and suppression implementation is complete in the local reposito
 - Branch: `main`
 - Baseline HEAD SHA: `fb087fcc7896a600a8bff914bcb8f10bcfd579ec`
 - Ending HEAD SHA: `fb087fcc7896a600a8bff914bcb8f10bcfd579ec` (local working tree remains uncommitted)
-- Baseline worktree: clean before implementation.
-- Preserved unrelated work: none was present at baseline; all changes are implementation/report changes.
+- Baseline worktree: dirty at the start of this reconciliation, with user-owned unsubscribe implementation changes preserved.
+- No destructive Git operations were used during this run.
 
 ## 3. Baseline Git state and preserved changes
 
-- No pre-existing staged, unstaged, or untracked files existed at baseline.
-- Current changes are limited to the unsubscribe implementation, migration, tests, and reports.
-- No destructive Git operations were used.
+- No pre-existing staged, unstaged, or untracked files were removed, stashed, reset, cleaned, or reverted.
+- The current worktree contains preserved prior unsubscribe implementation changes plus the CSV correction, regression tests, and reports.
+- No application implementation, migration, test, configuration, or environment file was committed or pushed during this task.
 
 ## 4. Files inspected and files changed
 
-Implementation files changed:
+### CSV correction files changed in this run
+
+- `src/lib/unsubscribed.ts`
+- `src/app/api/unsubscribed/export/route.ts`
+- `src/app/unsubscribed/page.tsx`
+- `src/lib/auth.ts`
+- `tests/db/unsubscribe-export.test.ts`
+
+### Preserved prior unsubscribe implementation files
+
 - `prisma/schema.prisma`
 - `src/lib/outreach/actions.ts`
 - `src/app/api/leads/bulk/route.ts`
 - `src/components/app-shell.tsx`
 - `src/middleware.ts`
-
-Implementation files created:
 - `prisma/migrations/20261023100000_add_unsubscribe_source/migration.sql`
-- `src/lib/unsubscribe/index.ts`
-- `src/lib/unsubscribe/token.ts`
+- `src/lib/unsubscribe/*`
+- `src/app/unsubscribe/*`
+- `src/app/api/unsubscribe/*`
+- `src/app/unsubscribed/*`
 - `src/lib/unsubscribed.ts`
-- `src/app/unsubscribe/route.ts`
-- `src/app/api/unsubscribe/route.ts`
-- `src/app/api/unsubscribed/export/route.ts`
-- `src/app/unsubscribed/page.tsx`
-
-Test files created:
 - `tests/unit/unsubscribe-token.test.ts`
 - `tests/db/unsubscribe.test.ts`
 
-Reports created:
-- `UNSUBSCRIBE-IMPLEMENTATION-REPORT-20261023.md`
+### Reports
+
+- `UNSUBSCRIBE-REMEDIATION-REPORT-20261023.md`
 - `UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
 
 ## 5. Findings grouped by severity
 
 ### High
-- None open.
+
+- Resolved on 2026-10-23: the dashboard CSV export-truncation defect.
+  - Mechanism: `/api/unsubscribed/export` requested `pageSize: 5000`, while the shared `listUnsubscribedContacts` path clamped `pageSize` through `MAX_PAGE_SIZE = 200`.
+  - Result: exports with more than 200 matching suppressed contacts could silently omit records.
+  - Correction: a dedicated export query now batches matching suppressed contacts in stable batches and does not apply the dashboard page cap.
+  - Completeness: the export loop continues through all result batches; no silent cap was introduced.
+  - Failure behavior: database errors return a safe failure response before CSV generation.
+  - This finding is no longer open.
 
 ### Medium
-- Public unsubscribe uses GET to perform suppression. This is necessary for one-click email links, but automated link scanners or prefetchers could trigger unsubscription. Mitigated with no-store caching and robots noindex; no confirmation flow is used because the required page explains that the contact has already been unsubscribed.
-- Production application URL and production database are not verified from repository evidence.
+
+- Production application URL, database, environment secrets, migration state, deployment, and external email-platform behavior remain unverified.
 
 ### Low
+
 - Two pre-existing lint errors remain in unrelated files.
-- Token signing reuses `SESSION_SECRET`; rotation invalidates all outstanding unsubscribe links.
-- No dedicated rate limiting on public unsubscribe or CSV export.
+- Token signing uses `SESSION_SECRET`; rotation can invalidate outstanding unsubscribe links.
+- No dedicated rate limiting on the public unsubscribe endpoint or protected CSV export.
+- No dedicated expired-token regression test exists.
+
+### Historical, superseded
+
+- The original unsubscribe implementation used GET for suppression. This was corrected: GET is preview-only and POST performs suppression.
 
 ## 6. Implementation fixes made and rationale
 
-- Added `source` to `outreach_status` and `outreach_event` to distinguish link-based unsubscribes from manual suppression.
-- Extended `applyOutreachDecision` with an optional `source` field and persisted it.
-- Marked `/unsubscribe` and `/api/unsubscribe` as public in middleware.
-- Added signed token creation and verification using HMAC-SHA256 over a base64url payload.
-- Implemented `unsubscribeContact` using the existing suppression action with reason `UNSUBSCRIBE`.
-- Added protected dashboard with search, sort, pagination, empty/error states, and CSV export.
-- Added navigation entry.
+- Added `source` to `outreach_status` and `outreach_event`.
+- Extended suppression decisions with source attribution.
+- Added signed unsubscribe tokens and verification.
+- Corrected browser and API unsubscribe behavior.
+- Added protected dashboard and export path.
+- Corrected the CSV export path:
+  - Replaced the shared paginated lookup with a dedicated export reader.
+  - Batched results using a Prisma cursor on the unique status id and an explicit id tie-break in every sort.
+  - Kept the dashboard pagination limit at 200.
+  - Returned a safe failure response on database errors.
+  - Added route-handler-level session validation for the export.
+  - Passed the active dashboard search and non-default sort into the export request.
 
 ## 7. Token security and suppression findings
 
-- Tokens are HMAC-SHA256 signed using `SESSION_SECRET`; no secret is hardcoded or logged.
-- Verification rejects malformed, tampered, retargeted, and expired tokens.
-- Token payload contains the internal person id but is not a raw URL parameter; signature prevents retargeting.
-- Repeated unsubscribe requests are idempotent at state level and preserve append-only audit history.
-- Invalid tokens return generic errors without disclosing whether a contact exists.
+- Tokens are HMAC-SHA256 signed using `SESSION_SECRET`.
+- Token payload includes the internal person id; signatures prevent retargeting.
+- Verification rejects malformed, tampered, retargeted, and expired tokens when applicable.
+- GET is preview-only; POST performs suppression.
+- API POST supports provider-style one-click unsubscribe.
+- Repeated requests remain idempotent and preserve audit history.
 
 ## 8. Migration and schema compatibility findings
 
-- Migration `20261023100000_add_unsubscribe_source` adds nullable `TEXT` `source` columns to both tables.
-- Existing rows remain valid; null defaults are appropriate.
-- Migration applied successfully to the dedicated test database.
-- No indexes or constraints were changed.
-- Reversibility: dropping the columns would lose source attribution only; suppression state and audit history remain.
+- Migration `20261023100000_add_unsubscribe_source` adds nullable source columns.
+- The migration was applied successfully to the dedicated test database.
+- No pending migrations remained.
+- No production migration was applied.
 
 ## 9. Dashboard authorization and CSV security findings
 
-- `/unsubscribed` calls `requireSession()` and is protected by existing middleware.
-- Unauthorized requests redirect to login for pages or receive 401 for APIs.
-- CSV uses the shared `buildCsv` writer with formula-injection protection and RFC 4180 escaping.
-- Dashboard exports the complete filtered result set, not only the current page.
-- Search handles email, name, and search text; sorting supports date and email directions.
-- Empty and error states are rendered.
+- Dashboard calls session validation.
+- Export now validates the session directly from the request cookie as defense in depth.
+- Unauthorized and invalid-session export requests receive 401.
+- Database failure during export returns 500 without partial CSV output.
+- CSV uses RFC 4180 escaping and formula-injection protection.
+- Complete filtered export is now supported; dashboard pagination remains capped at 200.
 
 ## 10. Export-path suppression coverage
 
-- Default export scope requires `APPROVED` status and valid email, excluding suppressed contacts.
-- GMass export applies `selectExportableRecords`, excluding non-approved contacts.
-- Selected and filtered exports are filtered by `selectExportableRecords` for GMass.
-- General canonical export may include suppressed records for review, but they are marked with status and reason and are not eligible for outreach.
-- No alternate scheduled export paths were found.
+- Default export excludes suppressed contacts.
+- GMass export applies the eligible-record filter.
+- Suppressed contacts remain excluded from outreach exports.
 
 ## 11. Exact test commands, exit results, and coverage
 
-- `npm test`: passed, 4 files, 36 tests.
-- `npm run test:db -- tests/db/unsubscribe.test.ts`: passed, 1 file, 9 tests.
-- `npm run test:db` (full): passed, 5 files, 38 tests.
-- `npx tsc --noEmit`: passed.
-- `npm run lint`: 2 pre-existing errors in unrelated files; no new errors from implementation files.
-- `npm run build`: passed.
-- `npx prisma generate`: passed.
-- Migration validation: passed against dedicated test database.
+Final local acceptance run on 2026-10-23:
+
+- `npm test`: **passed**, 4 files, **36 tests**.
+- Focused database tests (`npm run test:db -- tests/db/unsubscribe-export.test.ts tests/db/unsubscribe.test.ts`): **passed**, 2 files, **19 tests**, including:
+  - Export completeness beyond 200 rows and across batches.
+  - Search filtering.
+  - Empty export.
+  - CSV escaping and formula protection.
+  - Authorization.
+  - Database failure behavior.
+  - Suppression exclusion.
+- Full database suite (`npm run test:db`): **passed**, 6 files, **49 tests**, including the preserved unsubscribe flow and new export suite. Migration validation completed with 2 migrations found and no pending migrations.
+- `npx tsc --noEmit`: **passed**, exit 0, no diagnostics.
+- `npm run build`: **passed**, production build compiled successfully and TypeScript validation completed.
+- `npm run lint`: **failed** with the two pre-existing unrelated errors:
+  - `src/components/exports/export-panel.tsx:55`
+  - `src/components/import/preview-table.tsx:83`
+  - No new lint errors were introduced by the unsubscribe or CSV implementation.
+- Migration validation: **passed** against the dedicated test database via the full database suite.
+
+A later full database rerun passed all 49 tests; an earlier full rerun experienced one 180-second timeout on a previously passing unsubscribe API test, and the final rerun passed cleanly.
 
 ## 12. Lint findings
 
-Pre-existing unrelated errors:
-- `src/components/exports/export-panel.tsx`
-- `src/components/import/preview-table.tsx`
-
-No lint errors were introduced by the unsubscribe implementation.
+- Pre-existing unrelated errors in `src/components/exports/export-panel.tsx` and `src/components/import/preview-table.tsx`.
+- No new lint errors from the CSV fix or unsubscribe implementation.
 
 ## 13. Production prerequisites that remain unverified
 
 - Production application hostname and reachability.
 - Production database engine/version and migration application path.
-- Production environment variables and secret management.
+- Production environment variables, including `SESSION_SECRET`.
 - Correct public origin for generated unsubscribe URLs.
-- Reverse proxy, caching, CSRF, and middleware behavior in production.
-- GMass or email-platform configuration changes, if any.
+- Reverse proxy and caching behavior.
+- External email-platform configuration for `List-Unsubscribe` and `List-Unsubscribe-Post`.
+- Controlled email recipient for final validation; no real recipient was contacted.
 
 ## 14. Explicit owner actions and release gates
 
-- Confirm the production hostname for the Outreach application.
-- Configure and verify `SESSION_SECRET` in production.
-- Apply migration `20261023100000_add_unsubscribe_source` to production database during deployment.
-- Deploy the changed routes, dashboard, and migration.
-- Decide whether a branded hostname requires DNS/routing changes.
+- Deploy the corrected local application implementation.
+- Apply migration `20261023100000_add_unsubscribe_source` to production during deployment.
+- Configure production secrets and environment.
+- Configure and verify external email-platform unsubscribe headers.
+- Verify deployed endpoint with a controlled recipient.
+- Confirm DNS/routing only if required.
 - Authorize commit, push, and deployment.
 
 ## 15. Rollback and recovery considerations
 
-- Code rollback can remove the feature, but the database migration adds nullable columns that can remain safely.
-- Dropping the columns removes source attribution but not suppression state or audit history.
-- Existing unsubscribe links become invalid if `SESSION_SECRET` changes.
-- Suppressed contacts remain suppressed after rollback because status is unchanged.
+- Code rollback can remove the feature; nullable migration columns can remain safely.
+- Suppressed contacts remain suppressed after rollback.
 
 ## 16. Final acceptance checklist
 
-- [x] Valid unsubscribe link suppresses intended contact.
-- [x] Invalid token rejected safely.
-- [x] Altered token cannot target another contact.
-- [x] Repeated requests idempotent.
-- [x] Suppression and audit record persisted.
-- [x] Suppressed contacts excluded from relevant exports.
-- [x] Existing suppression reasons and history preserved.
-- [x] Dashboard access denied to unauthorized users by existing auth model.
-- [x] Authorized users can view and search suppressed contacts.
-- [x] Focused and regression tests pass.
-- [x] Type check and build pass.
-- [x] Migration validated against test database.
-- [ ] Production URL and database verified.
-- [ ] Production migration applied.
-- [ ] Deployment authorized.
+- [x] GET with a valid token renders confirmation without suppressing.
+- [x] Explicit browser POST suppresses the intended contact.
+- [x] Provider-style POST suppresses the intended contact without a browser session.
+- [x] Invalid tokens are rejected without state changes.
+- [x] Repeated requests remain idempotent.
+- [x] Suppression and audit persistence verified.
+- [x] Suppressed contacts excluded from default and GMass exports.
+- [x] Dashboard access remains protected.
+- [x] Authorized users can search, sort, and paginate suppressed contacts.
+- [x] Dashboard pagination remains capped at 200.
+- [x] CSV export now returns the complete filtered result set.
+- [x] CSV escaping and formula protection verified.
+- [x] Unauthorized export requests rejected.
+- [x] Unit, database, typecheck, build, and migration checks completed.
+- [x] No new lint errors from implementation.
+- [ ] Production URL, database, secrets, migration, deployment, and email headers verified.
 
 ## 17. Remaining defects and limitations
 
-- Public GET unsubscribe can be triggered by automated link scanners.
-- No dedicated unsubscribe secret independent of `SESSION_SECRET`.
-- No rate limiting on public endpoint or CSV export.
-- Production facts are unverified.
+- No open CSV truncation defect remains locally.
+- Token secret rotation can invalidate outstanding links.
+- Rate limiting remains absent.
+- Expired-token coverage remains partial.
+- Production verification remains incomplete.
 
 ## 18. Publication result
 
 - Canonical remote repository URL: `https://github.com/Booktok-max/Outreach.git`
 - Publication branch: `report/unsubscribe-release-readiness-20261023`
-- Publication commit SHA: `6d0ffcfadd04f00f1f6451b4ca046b4eb0fbe6b1`
-- Published files: `UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
-- Verified remote report URL: `https://raw.githubusercontent.com/Booktok-max/Outreach/report/unsubscribe-release-readiness-20261023/UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
-- Remote publication independently verified: yes, HTTP 200.
-- Unrelated local implementation changes were preserved and were not included in the publication commit.
-PY
+- Historical publication commit: `1566bdb87fbeeca1f2d887186e5d8f0cf782d6a8`
+- Corrected-report publication commit: `d53128aead594285abf21a23b9f3224bb092db2c`
+- Published files: `UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`, `UNSUBSCRIBE-REMEDIATION-REPORT-20261023.md`
+- Remote report URLs:
+  - `https://raw.githubusercontent.com/Booktok-max/Outreach/report/unsubscribe-release-readiness-20261023/UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
+  - `https://raw.githubusercontent.com/Booktok-max/Outreach/report/unsubscribe-release-readiness-20261023/UNSUBSCRIBE-REMEDIATION-REPORT-20261023.md`
+- Publication was verified on 2026-10-23; the reports then contained the open CSV defect, which has since been corrected locally and documented above.
+
+## 19. Final delivery boundary
+
+- No production deployment occurred.
+- No production migration was applied.
+- No production data, secret, DNS, or email-send action occurred.
+- The corrected application implementation remains local and uncommitted.

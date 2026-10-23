@@ -179,5 +179,11 @@ No lint errors were introduced by the unsubscribe implementation.
 
 ## 18. Publication result
 
-Publication details will be appended after remote publication verification.
+- Canonical remote repository URL: `https://github.com/Booktok-max/Outreach.git`
+- Publication branch: `report/unsubscribe-release-readiness-20261023`
+- Publication commit SHA: `b89b6a3`
+- Published files: `UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
+- Verified remote report URL: `https://raw.githubusercontent.com/Booktok-max/Outreach/report/unsubscribe-release-readiness-20261023/UNSUBSCRIBE-RELEASE-READINESS-REPORT-20261023.md`
+- Remote publication independently verified: yes, HTTP 200.
+- Unrelated local implementation changes were preserved and were not included in the publication commit.
 PY

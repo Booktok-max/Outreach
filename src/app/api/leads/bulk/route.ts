@@ -85,6 +85,7 @@ export async function POST(request: Request) {
       action: parsed.action,
       reason: parsed.reason ?? null,
       note: parsed.note ?? null,
+      source: "manual",
     });
 
     return jsonOk(result);

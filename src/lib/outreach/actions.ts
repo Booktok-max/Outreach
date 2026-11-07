@@ -30,6 +30,8 @@ export interface DecisionInput {
   reason?: SuppressionReasonValue | null;
   note?: string | null;
   actor?: string | null;
+  /// Origin of the decision (e.g. "manual", "unsubscribe-link").
+  source?: string | null;
 }
 
 export interface DecisionResult {
@@ -147,6 +149,7 @@ export async function applyOutreachDecision(input: DecisionInput): Promise<Decis
             status: targetState,
             suppressionReason:
               input.action === "suppress" ? (input.reason as SuppressionReasonValue) : null,
+            source: input.source ?? null,
             notes: input.note ?? previous?.notes ?? null,
             decisionNote: input.note ?? null,
             reviewedBy: input.actor ?? null,
@@ -156,6 +159,7 @@ export async function applyOutreachDecision(input: DecisionInput): Promise<Decis
             status: targetState,
             suppressionReason:
               input.action === "suppress" ? (input.reason as SuppressionReasonValue) : null,
+            source: input.source ?? null,
             decisionNote: input.note ?? null,
             reviewedBy: input.actor ?? null,
             reviewedAt: now,
@@ -170,6 +174,7 @@ export async function applyOutreachDecision(input: DecisionInput): Promise<Decis
             toState: targetState,
             reason: input.action === "suppress" ? (input.reason as SuppressionReasonValue) : null,
             note: input.note ?? null,
+            source: input.source ?? null,
             actor: input.actor ?? null,
           },
         });

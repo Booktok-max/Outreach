@@ -1,6 +1,7 @@
 "use client";
 
 import {
+  Ban,
   Database,
   Download,
   LayoutDashboard,
@@ -18,6 +19,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Dashboard", icon: LayoutDashboard },
   { href: "/imports", label: "Imports", icon: Database },
   { href: "/leads", label: "Leads", icon: Users },
+  { href: "/unsubscribed", label: "Unsubscribed", icon: Ban },
   { href: "/exports", label: "Export", icon: Download },
   { href: "/settings", label: "Settings", icon: Settings },
 ];

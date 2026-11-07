@@ -362,6 +362,8 @@ model OutreachStatus {
 
   status            OutreachState      @default(PENDING)
   suppressionReason SuppressionReason?
+  /// Origin of the current suppression state (e.g. "manual", "unsubscribe-link").
+  source            String?
   /// Free-form operator notes.
   notes             String?
   /// Why the record was approved/rejected/suppressed just now.
@@ -390,6 +392,8 @@ model OutreachEvent {
 
   reason SuppressionReason?
   note   String?
+  /// Origin of the decision (e.g. "manual", "unsubscribe-link").
+  source String?
   actor  String?
 
   createdAt DateTime @default(now())

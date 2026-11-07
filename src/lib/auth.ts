@@ -60,6 +60,38 @@ export async function getSession(): Promise<SessionPayload | null> {
   return verifySessionToken(token, env.SESSION_SECRET);
 }
 
+function readCookie(cookieHeader: string | null, name: string): string | null {
+  if (!cookieHeader) return null;
+
+  for (const part of cookieHeader.split(";")) {
+    const separator = part.indexOf("=");
+    if (separator < 0) continue;
+    if (part.slice(0, separator).trim() !== name) continue;
+
+    const value = part.slice(separator + 1).trim();
+    if (!value) return null;
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Session check for route handlers that receive a `Request` directly.
+ *
+ * Middleware already rejects unauthenticated API requests, but sensitive export
+ * routes also verify the cookie themselves so the authorization guarantee does
+ * not depend on matcher configuration or on how the handler is invoked.
+ */
+export async function getSessionFromRequest(request: Request): Promise<SessionPayload | null> {
+  const token = readCookie(request.headers.get("cookie"), SESSION_COOKIE);
+  return verifySessionToken(token, getEnv().SESSION_SECRET);
+}
+
 /** Throws a redirect to `/login` when the request is not authenticated. */
 export async function requireSession(): Promise<SessionPayload> {
   const session = await getSession();

@@ -15,6 +15,9 @@ const PUBLIC_ROUTES = ["/login", "/api/auth/login", "/api/health"];
 
 function isPublicRoute(pathname: string): boolean {
   if (PUBLIC_ROUTES.includes(pathname)) return true;
+  // Public, token-gated unsubscribe endpoints (no login required).
+  if (pathname === "/unsubscribe" || pathname.startsWith("/unsubscribe/")) return true;
+  if (pathname === "/api/unsubscribe" || pathname.startsWith("/api/unsubscribe/")) return true;
   if (pathname.startsWith("/_next")) return true;
   if (pathname === "/favicon.ico" || pathname === "/robots.txt") return true;
   // Static assets (public/).
